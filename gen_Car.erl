@@ -17,7 +17,7 @@
 		 code_change/4, handle_sync_event/4, handle_event/3]).
 
 %% defines
--define(IM_SERVER, 'S@127.0.0.1').
+-define(IM_SERVER, 'S@10.0.0.3').
 -define(IM_MODULE, gen_IM).
 -define(ReRequest, 150).
 -define(Car_Space,60).
@@ -129,8 +129,9 @@ move({car,rear_car_pid, Rear_Car_PID},{X_New_Axis,Y_New_Axis,X_Dest_Axis,Y_Dest_
 	end;
 move({timeout,exp},{X_New_Axis,Y_New_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Color}) ->
 	{next_state, move,{X_New_Axis,Y_New_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Color}}; %Ignoring
-move({car,terminate},_) ->
-	gen_fsm:send_all_state_event(self(), stop). %Terminating
+move({car,terminate},{X_New_Axis,Y_New_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Color}) ->
+	gen_fsm:send_all_state_event(self(), stop), %Terminating
+	{next_state, move,{X_New_Axis,Y_New_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Color}}.
 
 %%%//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 wait({car,rear_car_pid, Rear_Car_PID},{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,_,Color}) ->
@@ -167,9 +168,9 @@ wait({car,approved},{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Ax
 			gen_fsm:send_all_state_event(self(), stop) %Terminating
 	end,
 	{next_state, wait, {X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Rear_Car_PID,Color}};
-wait({car,terminate},_) ->
-	gen_fsm:send_all_state_event(self(), stop). %Terminating
-
+wait({car,terminate},{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Rear_Car_PID,Color}) ->
+	gen_fsm:send_all_state_event(self(), stop), %Terminating
+	{next_state, wait, {X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Rear_Car_PID,Color}}.
 %%%//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 stop({car,rear_car_pid, Rear_Car_PID},{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,_,Color}) ->
 	case Rear_Car_PID of
@@ -222,9 +223,9 @@ stop({car,update,stop,{X_New_Stop_Axis,Y_New_Stop_Axis}},{X_Axis,Y_Axis,X_Dest_A
 		true ->
 			{next_state, stop, {X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_New_Stop_Axis,Y_New_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Rear_Car_PID,Color}}
 	end;
-stop({car,terminate},_) ->
-	gen_fsm:send_all_state_event(self(), stop). %Terminating
-
+stop({car,terminate},{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Rear_Car_PID,Color}) ->
+	gen_fsm:send_all_state_event(self(), stop), %Terminating
+	{next_state, stop, {X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Rear_Car_PID,Color}}.
 %%%===================================================================
 %%% gen_fsm External Events
 %%%===================================================================

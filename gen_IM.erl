@@ -1,11 +1,4 @@
-%%%-------------------------------------------------------------------
-%%% @author Boaz Ardel <boaz@ubuntu>
-%%% @copyright (C) 2015, Boaz Ardel
-%%% @doc
-%%%
-%%% @end
-%%% Created : 26 Jul 2015 by Boaz Ardel <boaz@ubuntu>
-%%%-------------------------------------------------------------------
+
 -module(gen_IM).
 
 -behaviour(gen_server).
@@ -17,15 +10,15 @@
 	 terminate/2, code_change/3]).
 
 %% defines
--define(Display_Node, 'S@127.0.0.1').
+-define(Display_Node, 'S@10.0.0.3').
 -define(Display_Module, gen_Display).
--define(RM_North_Node, 'F@127.0.0.1').
+-define(RM_North_Node, 'F@10.0.0.9').
 -define(RM_North_Module, gen_RM).
--define(RM_South_Node, 'F@127.0.0.1').
+-define(RM_South_Node,'F@10.0.0.2').
 -define(RM_South_Module, gen_RM).
--define(RM_East_Node, 'F@127.0.0.1').
+-define(RM_East_Node,'F@10.0.0.8').
 -define(RM_East_Module, gen_RM).
--define(RM_West_Node, 'F@127.0.0.1').
+-define(RM_West_Node, 'F@10.0.0.7').
 -define(RM_West_Module, gen_RM).
 -define(Car_Module, gen_Car).
 -define(Time_Slot, 20).
@@ -55,7 +48,8 @@ init([]) ->
 	ets:insert(Cars_ETS,{slot_Counter,0}),   %initial time slot is 0
 	Queue = queue:new(),				%Data => {PID,{X,Y,Deg,Color,Dest},Path,HeavyPath}, Path => {timeslot,{x,y,deg}} , HeavyPath => {timeslot,{x,y}}
 	
-	Self = self(),spawn(fun() -> moveCars(ETS,Cars_ETS,Self) end),	%Setting timeout-timer for moving cars
+	Self = self(),CarMover = spawn(fun() -> moveCars(ETS,Cars_ETS,Self) end),	%Setting timeout-timer for moving cars
+	ets:insert(ETS,{car_move,CarMover}),   %car_move PID for termination purpose
 	register(im_server,Self),
 	
 	%starting all servers
@@ -64,6 +58,9 @@ init([]) ->
 	rpc:call(?RM_South_Node, ?RM_South_Module, start_link, [south]),
 	rpc:call(?RM_West_Node, ?RM_West_Module, start_link, [west]),
 	rpc:call(?RM_East_Node, ?RM_East_Module, start_link, [east]),
+	
+	random:seed(erlang:phash2([node()]),erlang:monotonic_time(),erlang:unique_integer()),	%individual seed
+	
     {ok, {ETS,Cars_ETS,Queue}}.
 
 handle_info({timeout,const},{ETS,Cars_ETS,Queue}) ->
@@ -73,9 +70,9 @@ handle_info({timeout,const},{ETS,Cars_ETS,Queue}) ->
 	{noreply, {ETS,Cars_ETS,NewQ}};
 
 handle_info({im,request,{X,Y,Deg,Color,RM_Dir},PID},{ETS,Cars_ETS,Queue}) ->
-	Direction = random:uniform(3)-1,
+	Direction = random:uniform(3)-1,		%random turn
 	if 
-		(Direction==0) -> 
+		(Direction==0) -> 					%determine destination
 			Path = turnPath(X,Y,Deg,true),
 			case RM_Dir of north -> Dest = west; south -> Dest = east; west -> Dest = south; east-> Dest = north end;
 		(Direction==1) ->
@@ -86,9 +83,22 @@ handle_info({im,request,{X,Y,Deg,Color,RM_Dir},PID},{ETS,Cars_ETS,Queue}) ->
 			case RM_Dir of north -> Dest = south; south -> Dest = north; west -> Dest = east; east-> Dest = west end
 	end,
 	
-	NewQ = queue:in({PID,{X,Y,Deg,Color,Dest},Path,heavyPath(Path)},Queue),
+	NewQ = queue:in({PID,{X,Y,Deg,Color,Dest},Path,heavyPath(Path),erlang:timestamp()},Queue),			%enter requrst to queue
 	{noreply, {ETS,Cars_ETS,NewQ}};
 
+handle_info({im,terminate},{ETS,Cars_ETS,Queue}) ->			%termination
+	[{car_move,CarMover}] = ets:lookup(ETS, car_move),  %getting car mover pid
+	Stat1_Result =  average([X||{_,X}<-ets:lookup(ETS,stat1)]),
+	Stat2_Result =  average([X||{_,X}<-ets:lookup(ETS,stat2)]),
+	io:format("Request Average Handle Time:~p[sec]~nCar Average Sojourn Time:~p[sec]~n",[Stat1_Result/1000000,Stat2_Result/1000000]),
+	CarMover!{terminate},
+	{north,?RM_North_Node}!{rm,terminate},			%terminating servers
+	{south,?RM_South_Node}!{rm,terminate},
+	{west,?RM_West_Node}!{rm,terminate},
+	{east,?RM_East_Node}!{rm,terminate},
+	display!{im_is_dead},
+	{stop, shutdown, {ETS,Cars_ETS,Queue}};
+	
 handle_info(_,{ETS,Cars_ETS,Queue}) ->
 	{noreply, {ETS,Cars_ETS,Queue}}.
 
@@ -110,7 +120,13 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 moveCars(ETS,Cars_ETS,MasterPid) ->
 	receive
-		{terminate} -> ok
+		{terminate} -> 
+			try  
+				ets:delete(im_ets),   %deleting Database
+				ets:delete(car_ets)
+			catch
+				_:_ -> ok
+			end
 	after ?Time_Slot -> 
 		%Update Time slot
 		[{_,Time}] = ets:lookup(Cars_ETS, slot_Counter),  %getting time slot
@@ -125,9 +141,10 @@ moveCars(ETS,Cars_ETS,MasterPid) ->
 		moveCars(ETS,Cars_ETS,MasterPid)
 	end.
 	  
-sendUpdateMove({PID,Path,Road_Direction,Color,LastX,LastY,LastDeg},Cars_ETS) ->
+sendUpdateMove({PID,Path,Road_Direction,Color,LastX,LastY,LastDeg,Req_Time},Cars_ETS) ->
 	if
 		(Path==[]) -> 
+			ets:insert(im_ets,{stat2,timer:now_diff(erlang:timestamp(),Req_Time)}),   %stat2 -> sojourn time
 			ets:delete(Cars_ETS,PID),
 			display!{display,delete,location,{PID,{LastX,LastY,LastDeg,Color}}},  %Send delete update to Display
 			case Road_Direction of
@@ -139,7 +156,7 @@ sendUpdateMove({PID,Path,Road_Direction,Color,LastX,LastY,LastDeg},Cars_ETS) ->
 		true -> 
 			[{_,{X,Y,Deg}}|Rest] = Path,
 			display!{display,update,location,{PID,{X,Y,Deg,Color}}},  %Send update to Display
-			ets:insert(Cars_ETS,{PID,Rest,Road_Direction,Color,X,Y,Deg})
+			ets:insert(Cars_ETS,{PID,Rest,Road_Direction,Color,X,Y,Deg,Req_Time})
 	end.
 
 checkAndConfirm(ETS,Cars_ETS,Queue,Slot_Counter) ->
@@ -147,22 +164,23 @@ checkAndConfirm(ETS,Cars_ETS,Queue,Slot_Counter) ->
 		true -> 
 			Queue;
 		false ->
-			{{_,{PID,{X,Y,Deg,Color,Road_Direction},Path,HeavyPath_ETS}},NewQ} = queue:out(Queue),
+			{{_,{PID,{X,Y,Deg,Color,Road_Direction},Path,HeavyPath_ETS,Req_Time}},NewQ} = queue:out(Queue),
 			
 			%checking collisions
 			Bool = etsCrossCompareAllocation(ETS,HeavyPath_ETS,Slot_Counter,0),
 			if
 				(Bool == true) -> 	%approve
-					ets:insert(Cars_ETS,{PID,Path,Road_Direction,Color,X,Y,Deg}),	
+					ets:insert(ETS,{stat1,timer:now_diff(erlang:timestamp(),Req_Time)}),   %stat1 -> request handle time
+					ets:insert(Cars_ETS,{PID,Path,Road_Direction,Color,X,Y,Deg,Req_Time}),	
 					PID!{car,approved}, %approve car
 					ets:insert(ETS,keyOfsset(ets:tab2list(HeavyPath_ETS),((Slot_Counter+?Calc_Time) rem ?Slot_Counter_Mod),[])), %allocating
-					ets:delete(HeavyPath_ETS),												%erase heavy path
-					[{_,NewTimeSlot}] = ets:lookup(Cars_ETS, slot_Counter), 									%getting time slot
-					NewQ1 = checkAndConfirm(ETS,Cars_ETS,NewQ,((NewTimeSlot+1) rem ?Slot_Counter_Mod)),NewQ1;	%next request
+					ets:delete(HeavyPath_ETS),																%erase heavy path
+					[{_,NewTimeSlot}] = ets:lookup(Cars_ETS, slot_Counter), 								%getting time slot
+					checkAndConfirm(ETS,Cars_ETS,NewQ,((NewTimeSlot+1) rem ?Slot_Counter_Mod));				%next request
 				true ->       		%denied
-					[{_,NewTimeSlot}] = ets:lookup(Cars_ETS, slot_Counter),							%getting time slot
+					[{_,NewTimeSlot}] = ets:lookup(Cars_ETS, slot_Counter),									%getting time slot
 					NewQ1 = checkAndConfirm(ETS,Cars_ETS,NewQ,((NewTimeSlot+1) rem ?Slot_Counter_Mod)),
-					queue:in({PID,{X,Y,Deg,Color,Road_Direction},Path,HeavyPath_ETS},NewQ1) %insert denied car
+					queue:in({PID,{X,Y,Deg,Color,Road_Direction},Path,HeavyPath_ETS,Req_Time},NewQ1)		%insert denied car
 			end
 	end.
 
@@ -192,52 +210,52 @@ turnPath(X_axis,Y_axis,Car_Start_Deg,IsClockwise) ->
 		0 ->
 			if
 				(IsClockwise==true) ->
-					R = round(math:sqrt(math:pow(X_axis-?Corner_X, 2) + math:pow(Y_axis - (?Corner_Y + ?Intersection_Edge), 2))),
-					W = ?Speed / R,
-					Path = turnPath(R,W,0,0,IsClockwise,[]),
-					[{TimeSlot,{X_axis + X,Y_axis + (R-Y), Deg}} || {TimeSlot,{X,Y,Deg}} <- Path];
+					R = round(math:sqrt(math:pow(X_axis-?Corner_X, 2) + math:pow(Y_axis - (?Corner_Y + ?Intersection_Edge), 2))),		%determine radius
+					W = ?Speed / R, %finding angular speed
+					Path = turnPath(R,W,0,0,IsClockwise,[]), %calculating path
+					[{TimeSlot,{X_axis + X,Y_axis + (R-Y), Deg}} || {TimeSlot,{X,Y,Deg}} <- Path]; %shifting coordinates
 				true ->
-					R = round(math:sqrt(math:pow(X_axis-?Corner_X, 2) + math:pow(Y_axis - (?Corner_Y), 2))),
-					W = ?Speed / R,
+					R = round(math:sqrt(math:pow(X_axis-?Corner_X, 2) + math:pow(Y_axis - (?Corner_Y), 2))),		%determine radius
+					W = ?Speed / R, %finding angular speed
 					Path = turnPath(R,W,0,0,IsClockwise,[]),
-					[{TimeSlot,{X_axis + X,Y_axis - (R+Y),Deg}}|| {TimeSlot,{X,Y,Deg}} <- Path]
+					[{TimeSlot,{X_axis + X,Y_axis - (R+Y),Deg}}|| {TimeSlot,{X,Y,Deg}} <- Path]  %shifting coordinates
 			end;
 		90 ->
 			if
 				(IsClockwise==true) ->
-					R = round(math:sqrt(math:pow(X_axis-(?Corner_X+?Intersection_Edge), 2) + math:pow(Y_axis - (?Corner_Y + ?Intersection_Edge), 2))),
-					W = ?Speed / R,
+					R = round(math:sqrt(math:pow(X_axis-(?Corner_X+?Intersection_Edge), 2) + math:pow(Y_axis - (?Corner_Y + ?Intersection_Edge), 2))),		%determine radius
+					W = ?Speed / R, %finding angular speed
 					Path = turnPath(R,W,0,90,IsClockwise,[]),
 					[{TimeSlot,{X_axis + (R+X),Y_axis -Y,Deg}} || {TimeSlot,{X,Y,Deg}} <- Path];
 				true ->
-					R = round(math:sqrt(math:pow(X_axis-?Corner_X, 2) + math:pow(Y_axis - (?Corner_Y + ?Intersection_Edge), 2))),
-					W = ?Speed / R,
+					R = round(math:sqrt(math:pow(X_axis-?Corner_X, 2) + math:pow(Y_axis - (?Corner_Y + ?Intersection_Edge), 2))),		%determine radius
+					W = ?Speed / R, %finding angular speed
 					Path = turnPath(R,W,0,90,IsClockwise,[]),
 					[{TimeSlot,{X_axis - (R-X),Y_axis - Y,Deg}}|| {TimeSlot,{X,Y,Deg}} <- Path]
 			end;
 		180 ->
 			if
 				(IsClockwise==true) ->
-					R = round(math:sqrt(math:pow(X_axis-(?Corner_X+?Intersection_Edge), 2) + math:pow(Y_axis - (?Corner_Y), 2))),
-					W = ?Speed / R,
+					R = round(math:sqrt(math:pow(X_axis-(?Corner_X+?Intersection_Edge), 2) + math:pow(Y_axis - (?Corner_Y), 2))),		%determine radius
+					W = ?Speed / R, %finding angular speed
 					Path = turnPath(R,W,0,180,IsClockwise,[]),
 					[{TimeSlot,{X_axis + X,Y_axis -(R+Y),Deg}} || {TimeSlot,{X,Y,Deg}} <- Path];
 				true ->
-					R = round(math:sqrt(math:pow(X_axis-(?Corner_X+?Intersection_Edge), 2) + math:pow(Y_axis - (?Corner_Y + ?Intersection_Edge), 2))),
-					W = ?Speed / R,
+					R = round(math:sqrt(math:pow(X_axis-(?Corner_X+?Intersection_Edge), 2) + math:pow(Y_axis - (?Corner_Y + ?Intersection_Edge), 2))),		%determine radius
+					W = ?Speed / R, %finding angular speed
 					Path = turnPath(R,W,0,180,IsClockwise,[]),
 					[{TimeSlot,{X_axis + X,Y_axis + (R-Y),Deg}}|| {TimeSlot,{X,Y,Deg}} <- Path]
 			end;
 		270 ->
 			if
 				(IsClockwise==true) ->
-					R = round(math:sqrt(math:pow(X_axis-(?Corner_X), 2) + math:pow(Y_axis - (?Corner_Y), 2))),
-					W = ?Speed / R,
+					R = round(math:sqrt(math:pow(X_axis-(?Corner_X), 2) + math:pow(Y_axis - (?Corner_Y), 2))),		%determine radius
+					W = ?Speed / R, %finding angular speed
 					Path = turnPath(R,W,0,270,IsClockwise,[]),
 					[{TimeSlot,{X_axis - (R-X),Y_axis - Y,Deg}} || {TimeSlot,{X,Y,Deg}} <- Path];
 				true ->
-					R = round(math:sqrt(math:pow(X_axis-(?Corner_X+?Intersection_Edge), 2) + math:pow(Y_axis - (?Corner_Y), 2))),
-					W = ?Speed / R,
+					R = round(math:sqrt(math:pow(X_axis-(?Corner_X+?Intersection_Edge), 2) + math:pow(Y_axis - (?Corner_Y), 2))),		%determine radius
+					W = ?Speed / R, %finding angular speed
 					Path = turnPath(R,W,0,270,IsClockwise,[]),
 					[{TimeSlot,{X_axis + (R+X),Y_axis -Y,Deg}}|| {TimeSlot,{X,Y,Deg}} <- Path]
 			end
@@ -250,7 +268,7 @@ turnPath(R,W,TimeSlot,Car_Start_Deg,IsClockwise,Path) ->
 		true ->
 			case IsClockwise of
 				true ->
-					X = round(R*math:cos(-W*TimeSlot + degToRad(90 + Car_Start_Deg))),
+					X = round(R*math:cos(-W*TimeSlot + degToRad(90 + Car_Start_Deg))),	%polar coordinates path calculation
 					Y = round(R*math:sin(-W*TimeSlot + degToRad(90 + Car_Start_Deg))),
 					turnPath(R,W,TimeSlot+1,Car_Start_Deg,IsClockwise,Path++[{TimeSlot,{X,Y,mod(round(-radToDeg(W*TimeSlot) + Car_Start_Deg) , 360)}}]);
 				false ->
@@ -260,7 +278,7 @@ turnPath(R,W,TimeSlot,Car_Start_Deg,IsClockwise,Path) ->
 			end
 	end.
 
-strightPath(X_axis,Y_axis,Angle) -> 
+strightPath(X_axis,Y_axis,Angle) -> %calculating stright path
 	case Angle of
 		0 ->
 			[{TimeSlot,{X_axis + ?Speed*TimeSlot,Y_axis,0}}||TimeSlot<-lists:seq(0,?Intersection_Edge div ?Speed)];
@@ -309,6 +327,13 @@ radToDeg(Rad)->
 mod(X,Y) when X > 0 -> X rem Y;
 mod(X,Y) when X < 0 -> Y + X rem Y;
 mod(0,_) -> 0.
+
+average(X) ->
+        average(X, 0, 0).
+average([], Length, Sum) ->
+        Sum / Length;
+average([H|T], Length, Sum) ->
+        average(T, Length + 1, Sum + H).
 
 %%%===================================================================
 %%% Debug
