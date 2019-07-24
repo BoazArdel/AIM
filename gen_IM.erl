@@ -30,9 +30,12 @@
 -define(Car_Mudule, gen_Car).
 -define(Time_Slot, 20).
 -define(Speed, 3).
+-define(Slot_Counter_Mod, 600).
 -define(Intersection_Edge,400).
 -define(Corner_X, 450).
 -define(Corner_Y, 450).
+-define(Car_length, 51).
+-define(Car_width, 25).
 
 %%%===================================================================
 %%% API
@@ -44,22 +47,25 @@ start_link() ->
 %%% gen_server callbacks
 %%%===================================================================
 init([]) ->
-	ETS = ets:new(im_ets, [set]), 		%Data => {Timeslot,{X,Y}} for taken
-	Cars_ETS = ets:new(car_ets, [set]),	%DataBase => {PID,[toMove||RestPath]}
-	Queue = queue:new(),				%Data => {PID,{X,Y,Deg},Path,HeavyPath}
+	ETS = ets:new(im_ets, [bag]), 		%Data => {Timeslot,{X,Y}} for taken
+	Cars_ETS = ets:new(car_ets, [set]),	%DataBase => {PID,Path,Road_Destination,Color,X,Y,Deg})
+	Queue = queue:new(),				%Data => {PID,{X,Y,Deg,Color,Dest},Path,HeavyPath}, Path => {timeslot,{x,t,deg}} , HeavyPath => {timeslot,{x,y}}
 	Self = self(), spawn(fun() -> timer(const,?Time_Slot,Self) end), 	%Setting timeout-timer for moving cars
+	Slot_Counter = 0,       			%initial time slot is 0
 	register(im_server,Self),
-    {ok, {ETS,Cars_ETS,Queue}}.
+    {ok, {ETS,Cars_ETS,Queue,Slot_Counter}}.
 
-handle_info({timeout,const},{ETS,Cars_ETS,Queue}) ->
+handle_info({timeout,const},{ETS,Cars_ETS,Queue,Slot_Counter}) ->
 	%moving cars
 	_ = [sendUpdateMove(X,Cars_ETS)||X <- ets:tab2list(Cars_ETS)], %updating moves to Display + refreshing ETS
+	%delete the past
+	ets:delete(ETS, Slot_Counter), 		
 	%calculating and allocating + Confirm
-	NewQ = checkAndConfirm(ETS,Cars_ETS,Queue),
+	NewQ = checkAndConfirm(ETS,Cars_ETS,Queue,((Slot_Counter+1) rem ?Slot_Counter_Mod)),
 	Self = self(), spawn(fun() -> timer(const,?Time_Slot,Self) end), 	%Setting timeout-timer for moving cars
-	{noreply, {ETS,Cars_ETS,NewQ}};
+	{noreply, {ETS,Cars_ETS,NewQ,((Slot_Counter+1) rem ?Slot_Counter_Mod)}};
 
-handle_info({im,request,{X,Y,Deg,Color,RM_Dir},PID},{ETS,Cars_ETS,Queue}) ->
+handle_info({im,request,{X,Y,Deg,Color,RM_Dir},PID},{ETS,Cars_ETS,Queue,Slot_Counter}) ->
 	Direction = random:uniform(3)-1,
 	if 
 		(Direction==0) -> 
@@ -72,13 +78,11 @@ handle_info({im,request,{X,Y,Deg,Color,RM_Dir},PID},{ETS,Cars_ETS,Queue}) ->
 			Path = strightPath(X,Y,Deg),
 			case RM_Dir of north -> Dest = south; south -> Dest = north; west -> Dest = east; east-> Dest = west end
 	end,
-	%NewQ = queue:in_r({PID,{X,Y,Deg},Path,heavyPath(Path)}),
-	NewQ = queue:in_r({PID,{X,Y,Deg,Color,Dest},Path},Queue),
-	{noreply, {ETS,Cars_ETS,NewQ}};
+	NewQ = queue:in({PID,{X,Y,Deg,Color,Dest},Path,heavyPath(Path)},Queue),
+	{noreply, {ETS,Cars_ETS,NewQ,Slot_Counter}};
 
-handle_info(_,{ETS,Cars_ETS,Queue}) ->
-	io:format("sad"),
-	{noreply, {ETS,Cars_ETS,Queue}}.
+handle_info(_,{ETS,Cars_ETS,Queue,Slot_Counter}) ->
+	{noreply, {ETS,Cars_ETS,Queue,Slot_Counter}}.
 
 handle_call(_Event, _From, State) ->
     Reply = ok,
@@ -101,7 +105,7 @@ sendUpdateMove({PID,Path,Road_Direction,Color,LastX,LastY,LastDeg},Cars_ETS) ->
 		(Path==[]) -> 
 			ets:delete(Cars_ETS,PID),
 			rpc:call(?Display_Node, ?Display_Module, rpc_Call, [{display,delete,location,{PID,{LastX,LastY,LastDeg,Color}}}]),  %Send delete update to Display
-			case Road_Direction of %!!
+			case Road_Direction of
 				north ->	rpc:call(?RM_North_Node, ?RM_North_Module, rpc_Call, [{rm,create,{Color,LastX,LastY,Road_Direction}}]);  %create car
 				south ->	rpc:call(?RM_South_Node, ?RM_South_Module, rpc_Call, [{rm,create,{Color,LastX,LastY,Road_Direction}}]);
 				west ->		rpc:call(?RM_West_Node, ?RM_West_Module, rpc_Call, [{rm,create,{Color,LastX,LastY,Road_Direction}}]);
@@ -113,26 +117,47 @@ sendUpdateMove({PID,Path,Road_Direction,Color,LastX,LastY,LastDeg},Cars_ETS) ->
 			ets:insert(Cars_ETS,{PID,Rest,Road_Direction,Color,X,Y,Deg})
 	end.
 
-checkAndConfirm(ETS,Cars_ETS,Queue) ->
+checkAndConfirm(ETS,Cars_ETS,Queue,Slot_Counter) ->
 	case queue:is_empty(Queue) of
 		true -> 
 			Queue;
 		false ->
-			{{_,{PID,{X,Y,Deg,Color,Road_Direction},Path}},NewQ} = queue:out(Queue),
+			{{_,{PID,{X,Y,Deg,Color,Road_Direction},Path,HeavyPath_ETS}},NewQ} = queue:out(Queue),
 			
-			%Algorithm
-			
-			%approve all
-			
-			ets:insert(Cars_ETS,{PID,Path,Road_Direction,Color,X,Y,Deg}),
-			case Road_Direction of
-				north ->	rpc:call(?RM_North_Node, ?Car_Mudule, rpc_Call, [{car,approved,PID}]);  %Confirm 
-				south ->	rpc:call(?RM_South_Node, ?Car_Mudule, rpc_Call, [{car,approved,PID}]);
-				west ->		rpc:call(?RM_West_Node, ?Car_Mudule, rpc_Call, [{car,approved,PID}]);
-				east ->		rpc:call(?RM_East_Node, ?Car_Mudule, rpc_Call, [{car,approved,PID}])
-			end,
-			NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ),NewQ2
+			%checking collisions
+			Bool = etsCrossCompareAllocation(ETS,HeavyPath_ETS,Slot_Counter),
+			if
+				(Bool == true) -> 	%approve
+					ets:insert(Cars_ETS,{PID,Path,Road_Direction,Color,X,Y,Deg}),
+					case Road_Direction of
+						north ->	rpc:call(?RM_North_Node, ?Car_Mudule, rpc_Call, [{car,approved,PID}]);  %Confirm 
+						south ->	rpc:call(?RM_South_Node, ?Car_Mudule, rpc_Call, [{car,approved,PID}]);
+						west ->		rpc:call(?RM_West_Node, ?Car_Mudule, rpc_Call, [{car,approved,PID}]);
+						east ->		rpc:call(?RM_East_Node, ?Car_Mudule, rpc_Call, [{car,approved,PID}])
+					end,
+					ets:delete(HeavyPath_ETS),									%erase heavy path
+					%NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ),NewQ2;			%next request
+					NewQ;
+				
+				true ->       		%denied
+					NewQ1 = queue:in({PID,{X,Y,Deg,Color,Road_Direction},Path,HeavyPath_ETS},NewQ),
+					%NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ1),NewQ2
+					NewQ1
+			end
 	end.
+
+etsCrossCompareAllocation(Main_ETS,Path_ETS,Slot_Time) ->
+	PathList = keyOfsset(ets:tab2list(Path_ETS),Slot_Time,[]),
+	MainList = ets:tab2list(Main_ETS),
+	MutualList = lists:filter((fun(X) -> lists:member(X,MainList) end),PathList),
+	if
+		(MutualList == []) -> true;
+		true -> false
+	end.
+
+keyOfsset([],_,Ans) -> Ans; 					%adding all keys ofsset and modding the outcome
+keyOfsset([{Key,{A,B}}|Rest],Offset,Ans) -> 
+	keyOfsset(Rest,Offset,Ans ++ [{((Key+Offset) rem ?Slot_Counter_Mod),{A,B}}]). 
 	
 turnPath(X_axis,Y_axis,Car_Start_Deg,IsClockwise) ->
 	case Car_Start_Deg of
@@ -219,6 +244,35 @@ strightPath(X_axis,Y_axis,Angle) ->
 			[{TimeSlot,{X_axis ,Y_axis + ?Speed*TimeSlot ,270}}||TimeSlot<-lists:seq(0,?Intersection_Edge div ?Speed)]
 	end.
 
+%% Find lane thick path recursivly 
+heavyPath(List)-> ETS = ets:new(heavy,[bag]), heavyPath(List,ETS).
+heavyPath([],ETS)-> ETS;
+heavyPath([{TimeSlot,{X,Y,Angle}}|T],ETS)-> fillCoor(X,Y,Angle,TimeSlot,ETS),heavyPath(T,ETS).
+
+%%Find specific coordinate occuupid area 
+fillCoor(X_front,Y_front,Angle,TimeSlot,ETS)->
+	RadAngle=degToRad(Angle),
+	X_rear=X_front-?Car_length*math:cos(RadAngle),%rear middle
+	Y_rear=Y_front-?Car_length*math:sin(RadAngle),%rear middle
+	Front_R={round(X_front-(?Car_width/2)*math:sin(RadAngle)),round(Y_front+(?Car_width/2)*math:cos(RadAngle))},
+	Front_L={round(X_front+(?Car_width/2)*math:sin(RadAngle)),round(Y_front-(?Car_width/2)*math:cos(RadAngle))},
+	Rear_R={round(X_rear-(?Car_width/2)*math:sin(RadAngle)),round(Y_rear+(?Car_width/2)*math:cos(RadAngle))},
+	Rear_L={round(X_rear+(?Car_width/2)*math:sin(RadAngle)),round(Y_rear-(?Car_width/2)*math:cos(RadAngle))},
+	connectDots(Rear_R,Front_R,TimeSlot,ETS),connectDots(Front_R,Front_L,TimeSlot,ETS),connectDots(Front_L,Rear_L,TimeSlot,ETS),connectDots(Rear_L,Rear_R,TimeSlot,ETS).
+	%turn:heavyPath(turn:turnPath(850, 725, 180, true)).
+
+%%Find edges
+connectDots({X1,Y1},{X2,Y2},TimeSlot,ETS)->
+	case (X1-X2) of  
+		0-> 
+			M = (Y2-Y1)/(X2-(X1-1)),
+			N = (Y1*X2-Y2*X1)/(X2-(X1-1));
+		_->
+			M = (Y2-Y1)/(X2-X1),
+			N = (Y1*X2-Y2*X1)/(X2-X1)
+	end,
+	[ets:insert(ETS, {TimeSlot,{X,round(M*X+N)}})||X<-lists:seq(lists:min([X1,X2]), lists:max([X1,X2]))].%all line dots
+
 timer(Mode,Par,PID) ->
 	case Mode of
 		const -> 
@@ -234,13 +288,13 @@ timer(Mode,Par,PID) ->
 			end
 	end.
 
+rpc_Call(Msg) ->
+	im_server!Msg.
+
 degToRad(Deg)->
 	(math:pi()*(mod(Deg , 360)))/180.
 radToDeg(Rad)->
 	mod(round((Rad*180)/math:pi()),360).
-
-rpc_Call(Msg) ->
-	im_server!Msg.
 
 mod(X,Y) when X > 0 -> X rem Y;
 mod(X,Y) when X < 0 -> Y + X rem Y;
