@@ -16,7 +16,7 @@
 %% ====================================================================
 %% API functions
 %% ====================================================================
--export([opsLoop/1,init/0,drawLoop/4,initDrawLoop/1,rpc_Call/1]).
+-export([opsLoop/1,init/0,drawLoop/4,initDrawLoop/1]).
 
 
 
@@ -25,18 +25,18 @@
 %%%===================================================================
 init() -> 
 	CarsETS=ets:new(data, [set,public]),
-	register(ops,spawn(fun() -> opsLoop(CarsETS) end)), 	
+	register(display,spawn(fun() -> opsLoop(CarsETS) end)), 	
 	spawn(fun() -> initDrawLoop(CarsETS) end).%
 	
 	initDrawLoop(CarsETS)->%!!!!!!can be in init and in same process, its only for testing
 		Wx = wx:new(),
 		Frame = wxFrame:new(Wx, -1, "AIM", [{size, {?max_x, ?max_y}}]),
 		Panel = wxPanel:new(Frame),
-		A = wxImage:new("/home/snir/workspace1/tt/src/A.png"),
-		B = wxImage:new("/home/snir/workspace1/tt/src/B.png"),
-		C = wxImage:new("/home/snir/workspace1/tt/src/C.png"),
-		D = wxImage:new("/home/snir/workspace1/tt/src/D.png"),
-		BG = wxBitmap:new(wxImage:new("/home/snir/workspace1/tt/src/bg2.png")),
+		A = wxImage:new("/home/boaz/Erlang Workspace/AIM/src/Images/A.png"),
+		B = wxImage:new("/home/boaz/Erlang Workspace/AIM/src/Images/B.png"),
+		C = wxImage:new("/home/boaz/Erlang Workspace/AIM/src/Images/C.png"),
+		D = wxImage:new("/home/boaz/Erlang Workspace/AIM/src/Images/D.png"),
+		BG = wxBitmap:new(wxImage:new("/home/boaz/Erlang Workspace/AIM/src/Images/bg2.png")),
 		wxFrame:show(Frame),
 		drawLoop(Panel,{A,B,C,D},BG,CarsETS).
 
@@ -88,9 +88,6 @@ drawSession(Panel,CarImages,BG,CarsETS) ->
 
 degToRad(Deg)->
 	(math:pi()*Deg)/180.
-
-rpc_Call(Msg)->
-	ops!Msg.
 
 offset({X,Y},AngleDeg)->
 	Angle = degToRad(AngleDeg),

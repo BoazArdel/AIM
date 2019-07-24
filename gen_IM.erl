@@ -10,7 +10,7 @@
 
 -behaviour(gen_server).
 %% API
--export([start_link/0,rpc_Call/1]).
+-export([start_link/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -18,7 +18,7 @@
 
 %% defines
 -define(Display_Node, 'S@127.0.0.1').
--define(Display_Module, noets).
+-define(Display_Module, gen_Display).
 -define(RM_North_Node, 'F@127.0.0.1').
 -define(RM_North_Module, gen_RM).
 -define(RM_South_Node, 'F@127.0.0.1').
@@ -48,18 +48,27 @@ start_link() ->
 %%% gen_server callbacks
 %%%===================================================================
 init([]) ->
+	%Database init
 	ETS = ets:new(im_ets, [bag,public,named_table]), 		%Data => {Timeslot,{X,Y}} for taken
 	ets:insert(ETS,{slot_Counter,0}),   %initial time slot is 0
 	Cars_ETS = ets:new(car_ets, [set,public,named_table]),	%DataBase => {PID,Path,Road_Destination,Color,X,Y,Deg})
 	Queue = queue:new(),				%Data => {PID,{X,Y,Deg,Color,Dest},Path,HeavyPath}, Path => {timeslot,{x,y,deg}} , HeavyPath => {timeslot,{x,y}}
+	
 	Self = self(),spawn(fun() -> moveCars(ETS,Cars_ETS,Self) end),	%Setting timeout-timer for moving cars
 	register(im_server,Self),
+	
+	%starting all servers
+	?Display_Module:init(), %starting display
+	rpc:call(?RM_North_Node, ?RM_North_Module, start_link, [north]),
+	rpc:call(?RM_South_Node, ?RM_South_Module, start_link, [south]),
+	rpc:call(?RM_West_Node, ?RM_West_Module, start_link, [west]),
+	rpc:call(?RM_East_Node, ?RM_East_Module, start_link, [east]),
     {ok, {ETS,Cars_ETS,Queue}}.
 
 handle_info({timeout,const},{ETS,Cars_ETS,Queue}) ->
 	[{_,Time}] = ets:lookup(ETS, slot_Counter),  %getting time slot
 	%calculating and allocating + Confirm
-	NewQ = checkAndConfirm(ETS,Cars_ETS,Queue,((Time+1) rem ?Slot_Counter_Mod)),
+	NewQ = checkAndConfirm(ETS,Cars_ETS,Queue,((Time+2) rem ?Slot_Counter_Mod)),
 	{noreply, {ETS,Cars_ETS,NewQ}};
 
 handle_info({im,request,{X,Y,Deg,Color,RM_Dir},PID},{ETS,Cars_ETS,Queue}) ->
@@ -119,16 +128,16 @@ sendUpdateMove({PID,Path,Road_Direction,Color,LastX,LastY,LastDeg},Cars_ETS) ->
 	if
 		(Path==[]) -> 
 			ets:delete(Cars_ETS,PID),
-			rpc:call(?Display_Node, ?Display_Module, rpc_Call, [{display,delete,location,{PID,{LastX,LastY,LastDeg,Color}}}]),  %Send delete update to Display
+			display!{display,delete,location,{PID,{LastX,LastY,LastDeg,Color}}},  %Send delete update to Display
 			case Road_Direction of
-				north ->	rpc:call(?RM_North_Node, ?RM_North_Module, rpc_Call, [{rm,create,{Color,LastX,LastY,Road_Direction}}]);  %create car
-				south ->	rpc:call(?RM_South_Node, ?RM_South_Module, rpc_Call, [{rm,create,{Color,LastX,LastY,Road_Direction}}]);
-				west ->		rpc:call(?RM_West_Node, ?RM_West_Module, rpc_Call, [{rm,create,{Color,LastX,LastY,Road_Direction}}]);
-				east ->		rpc:call(?RM_East_Node, ?RM_East_Module, rpc_Call, [{rm,create,{Color,LastX,LastY,Road_Direction}}])
+						north ->	{Road_Direction,?RM_North_Node}!{rm,create,{Color,LastX,LastY}};  %create car
+						south ->	{Road_Direction,?RM_South_Node}!{rm,create,{Color,LastX,LastY}};
+						west ->		{Road_Direction,?RM_West_Node}!{rm,create,{Color,LastX,LastY}};
+						east ->		{Road_Direction,?RM_East_Node}!{rm,create,{Color,LastX,LastY}}
 			end;
 		true -> 
 			[{_,{X,Y,Deg}}|Rest] = Path,
-			rpc:call(?Display_Node, ?Display_Module, rpc_Call, [{display,update,location,{PID,{X,Y,Deg,Color}}}]),  %Send update to Display
+			display!{display,update,location,{PID,{X,Y,Deg,Color}}},  %Send update to Display
 			ets:insert(Cars_ETS,{PID,Rest,Road_Direction,Color,X,Y,Deg})
 	end.
 
@@ -143,22 +152,17 @@ checkAndConfirm(ETS,Cars_ETS,Queue,Slot_Counter) ->
 			Bool = etsCrossCompareAllocation(ETS,HeavyPath_ETS,Slot_Counter,0),
 			if
 				(Bool == true) -> 	%approve
-					ets:insert(Cars_ETS,{PID,Path,Road_Direction,Color,X,Y,Deg}),
-					case Road_Direction of
-						north ->	rpc:call(?RM_North_Node, ?Car_Module, rpc_Call, [{car,approved,PID}]);  %Confirm 
-						south ->	rpc:call(?RM_South_Node, ?Car_Module, rpc_Call, [{car,approved,PID}]);
-						west ->		rpc:call(?RM_West_Node, ?Car_Module, rpc_Call, [{car,approved,PID}]);
-						east ->		rpc:call(?RM_East_Node, ?Car_Module, rpc_Call, [{car,approved,PID}])
-					end,
+					ets:insert(Cars_ETS,{PID,Path,Road_Direction,Color,X,Y,Deg}),	
+					PID!{car,approved}, %approve car
 					ets:insert(ETS,keyOfsset(ets:tab2list(HeavyPath_ETS),Slot_Counter,[])), %allocating
 					ets:delete(HeavyPath_ETS),												%erase heavy path
 					[{_,NewTimeSlot}] = ets:lookup(ETS, slot_Counter),  %getting time slot
-					NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ,NewTimeSlot),NewQ2;			%next request
+					NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ,((NewTimeSlot+2) rem ?Slot_Counter_Mod)),NewQ2;			%next request
 				
 				true ->       		%denied
 					[{_,NewTimeSlot}] = ets:lookup(ETS, slot_Counter),  %getting time slot
 					NewQ1 = queue:in({PID,{X,Y,Deg,Color,Road_Direction},Path,HeavyPath_ETS},NewQ), %insert
-					NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ1,NewTimeSlot),NewQ2
+					NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ1,((NewTimeSlot+2) rem ?Slot_Counter_Mod)),NewQ2
 			end
 	end.
 
@@ -295,9 +299,6 @@ connectDots({X1,Y1},{X2,Y2},TimeSlot,ETS)->
 			N = (Y1*X2-Y2*X1)/(X2-X1)
 	end,
 	[ets:insert(ETS, {TimeSlot,{X,round(M*X+N)}})||X<-lists:seq(lists:min([X1,X2]), lists:max([X1,X2]))].%all line dots
-
-rpc_Call(Msg) ->
-	im_server!Msg.
 
 degToRad(Deg)->
 	(math:pi()*(mod(Deg , 360)))/180.

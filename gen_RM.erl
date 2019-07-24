@@ -10,7 +10,7 @@
 
 -behaviour(gen_server).
 %% API
--export([start_link/1,rpc_Call/1]).
+-export([start_link/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -90,7 +90,7 @@ handle_info({timeout,exp}, {ETS,Road_Direction,{Q1,Q2,Q3}}) ->
 handle_info({rm,update,location,{X_New_Axis,Y_New_Axis},PID}, {ETS,Road_Direction,{Q1,Q2,Q3}}) ->
 	[{_,{_,_,Deg,Color,Lane}}] = ets:lookup(ETS, PID),  %getting other stored info
 	ets:insert(ETS, {PID,{X_New_Axis,Y_New_Axis,Deg,Color,Lane}}), %updating new location
-	rpc:call(?Display_Node, ?Display_Module, rpc_Call, [{display,update,location,{PID,{X_New_Axis,Y_New_Axis,Deg,Color}}}]),  %Send update to Display
+	{display,?Display_Node}!{display,update,location,{PID,{X_New_Axis,Y_New_Axis,Deg,Color}}},  %Send update to Display
 	{noreply, {ETS,Road_Direction,{Q1,Q2,Q3}}};
 
 handle_info({rm,create,{Color,X,Y}}, {ETS,Road_Direction,{Q1,Q2,Q3}}) ->
@@ -114,14 +114,14 @@ handle_info({rm,update,departure,PID}, {ETS,Road_Direction,{Q1,Q2,Q3}}) ->
 
 handle_info({rm,update,term,PID}, {ETS,Road_Direction,{Q1,Q2,Q3}}) ->
 	[{_,{X,Y,Ang,Color,Lane}}] = ets:lookup(ETS, PID),
-	rpc:call(?Display_Node, ?Display_Module, rpc_Call, [{display,delete,location,{PID,{X,Y,Ang,Color}}}]),  %Send delete update to Display
+	{display,?Display_Node}!{display,delete,location,{PID,{X,Y,Ang,Color}}},  %Send delete update to Display
 	ets:delete(ETS, PID), %delete from DATABASE
 	%delete from queue
 	case Lane of 0-> New_Q1=lists:delete(PID, Q1),New_Q2=Q2,New_Q3=Q3; 1-> New_Q2=lists:delete(PID, Q2),New_Q1=Q1,New_Q3=Q3; 2-> New_Q3=lists:delete(PID, Q3),New_Q1=Q1,New_Q2=Q2 end,
 	{noreply, {ETS,Road_Direction,{New_Q1,New_Q2,New_Q3}}};
 
 handle_info({rm,request,rear_car_pid,PID}, {ETS,Road_Direction,{Q1,Q2,Q3}}) ->
-	[{_,{_,_,_,_,Lane}}] = ets:lookup(ETS, PID),
+	[{_,{_,_,_,_,Lane}}] = ets:lookup(ETS, PID), %!!!!!!!!!!!!!!!!!
 	case Lane of 0-> Answer = search_Rear(Q1,PID);1-> Answer = search_Rear(Q2,PID);2-> Answer = search_Rear(Q3,PID) end,
 	PID!{car,rear_car_pid,Answer}, %Reply with answer
 	{noreply, {ETS,Road_Direction,{Q1,Q2,Q3}}};
@@ -173,10 +173,6 @@ search_Rear([First|Rest],Car_PID) ->
 		true ->
 			search_Rear(Rest,Car_PID)
 	end.
-
-
-rpc_Call({rm,create,{Color,X,Y,RM_Direction}})->
-	RM_Direction!{rm,create,{Color,X,Y}}.
 
 %%%===================================================================
 %%% Debug

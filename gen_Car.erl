@@ -10,7 +10,7 @@
 -behaviour(gen_fsm).
 
 %% API
--export([start/7,rpc_Call/1]).
+-export([start/7]).
 
 %% gen_fsm callbacks
 -export([init/1, move/2, handle_info/3, terminate/3, wait/2, stop/2,
@@ -28,7 +28,7 @@
 %%%===================================================================
 %%%@doc Mode - after_t/before, 1/Speed - ms/Pixel 
 start({X_Start_Axis,Y_Start_Axis},{X_Dest_Axis,Y_Dest_Axis},Speed,Mode,RM_Direction,RM_PID,Color) ->
-	gen_fsm:start(?MODULE, [{X_Start_Axis,Y_Start_Axis},{X_Dest_Axis,Y_Dest_Axis},Speed,Mode,RM_Direction,RM_PID,Color], []).
+	gen_fsm:start(?MODULE, [{X_Start_Axis,Y_Start_Axis},{X_Dest_Axis,Y_Dest_Axis},(Speed div ?Car_Speed),Mode,RM_Direction,RM_PID,Color], []).
 
 %%%===================================================================
 %%% gen_fsm callbacks
@@ -62,19 +62,24 @@ terminate(_Reason, _StateName, _State) ->
 %%%===================================================================
 move({timeout,const},{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Color}) ->
 	if
-		(X_Axis < X_Dest_Axis) -> X_New_Axis = X_Axis + ?Car_Speed;			%move toward Destination on X_Axis
-		(X_Axis > X_Dest_Axis) -> X_New_Axis = X_Axis - ?Car_Speed;
+		(X_Axis < X_Dest_Axis) -> X_New_Axis = X_Axis + 1;			%move toward Destination on X_Axis
+		(X_Axis > X_Dest_Axis) -> X_New_Axis = X_Axis - 1;
 		true -> X_New_Axis = X_Axis
 	end,
 	if
-		(Y_Axis < Y_Dest_Axis) -> Y_New_Axis = Y_Axis + ?Car_Speed;			%move toward Destination on Y_Axis
-		(Y_Axis > Y_Dest_Axis) -> Y_New_Axis = Y_Axis - ?Car_Speed;
+		(Y_Axis < Y_Dest_Axis) -> Y_New_Axis = Y_Axis + 1;			%move toward Destination on Y_Axis
+		(Y_Axis > Y_Dest_Axis) -> Y_New_Axis = Y_Axis - 1;
 		true -> Y_New_Axis = Y_Axis
 	end,
 	
-	RM_Direction,RM_PID!{rm,update,location,{X_Axis,Y_Axis},self()},	%Update Location to RM
-	%io:format("->~p~n",[{rm,update,location,{X_Axis,Y_Axis},self()}]), 
-	
+	case (abs((X_Dest_Axis - X_New_Axis)+(Y_Dest_Axis-Y_New_Axis)) rem ?Car_Speed) of
+		0 -> 
+			RM_PID!{rm,update,location,{X_Axis,Y_Axis},self()};	%Update Location to RM
+			%io:format("->~p~n",[{rm,update,location,{X_Axis,Y_Axis},self()}]), 
+		_ -> 
+			ok
+	end,
+
 	case {X_Stop_Axis,Y_Stop_Axis} of
 		{false,false} -> 
 			if
@@ -84,7 +89,7 @@ move({timeout,const},{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_A
 							RM_PID!{rm,request,rear_car_pid,self()},  %request RM for rear car pid
 							%io:format("->~p~n",[{rm,request,rear_car_pid,self()}]),
 							case RM_Direction of west -> Deg = 0;east -> Deg = 180;north -> Deg = 270;south -> Deg = 90 end,
-							rpc:call(?IM_SERVER, ?IM_MODULE, rpc_Call, [{im,request,{X_New_Axis,Y_New_Axis,Deg,Color,RM_Direction},self()}]),  %Send request to IM
+							{im_server,?IM_SERVER}!{im,request,{X_New_Axis,Y_New_Axis,Deg,Color,RM_Direction},self()},  %Send request to IM
 							%io:format("->~p~n",[{im,request,{X_New_Axis,Y_New_Axis},self()}]),
 							{next_state, wait, {X_New_Axis,Y_New_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,noCar,Color}};
 						true -> 
@@ -282,9 +287,6 @@ timer(Mode,Par,PID) ->
 		{cancel} -> ok
 	after Par -> PID!{timeout,Mode}
 	end.
-
-rpc_Call({car,approved,PID}) ->
-	PID!{car,approved}.
 
 %%%===================================================================
 %%% Debug
