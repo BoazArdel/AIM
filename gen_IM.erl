@@ -27,15 +27,16 @@
 -define(RM_East_Module, gen_RM).
 -define(RM_West_Node, 'F@127.0.0.1').
 -define(RM_West_Module, gen_RM).
--define(Car_Mudule, gen_Car).
+-define(Car_Module, gen_Car).
 -define(Time_Slot, 20).
 -define(Speed, 3).
 -define(Slot_Counter_Mod, 600).
 -define(Intersection_Edge,400).
 -define(Corner_X, 450).
 -define(Corner_Y, 450).
--define(Car_length, 51).
--define(Car_width, 25).
+-define(Car_length, 10).
+-define(Car_width, 5).
+-define(HeavyPixel,5).
 
 %%%===================================================================
 %%% API
@@ -50,7 +51,7 @@ init([]) ->
 	ETS = ets:new(im_ets, [bag,public,named_table]), 		%Data => {Timeslot,{X,Y}} for taken
 	ets:insert(ETS,{slot_Counter,0}),   %initial time slot is 0
 	Cars_ETS = ets:new(car_ets, [set,public,named_table]),	%DataBase => {PID,Path,Road_Destination,Color,X,Y,Deg})
-	Queue = queue:new(),				%Data => {PID,{X,Y,Deg,Color,Dest},Path,HeavyPath}, Path => {timeslot,{x,t,deg}} , HeavyPath => {timeslot,{x,y}}
+	Queue = queue:new(),				%Data => {PID,{X,Y,Deg,Color,Dest},Path,HeavyPath}, Path => {timeslot,{x,y,deg}} , HeavyPath => {timeslot,{x,y}}
 	Self = self(),spawn(fun() -> moveCars(ETS,Cars_ETS,Self) end),	%Setting timeout-timer for moving cars
 	register(im_server,Self),
     {ok, {ETS,Cars_ETS,Queue}}.
@@ -144,10 +145,10 @@ checkAndConfirm(ETS,Cars_ETS,Queue,Slot_Counter) ->
 				(Bool == true) -> 	%approve
 					ets:insert(Cars_ETS,{PID,Path,Road_Direction,Color,X,Y,Deg}),
 					case Road_Direction of
-						north ->	rpc:call(?RM_North_Node, ?Car_Mudule, rpc_Call, [{car,approved,PID}]);  %Confirm 
-						south ->	rpc:call(?RM_South_Node, ?Car_Mudule, rpc_Call, [{car,approved,PID}]);
-						west ->		rpc:call(?RM_West_Node, ?Car_Mudule, rpc_Call, [{car,approved,PID}]);
-						east ->		rpc:call(?RM_East_Node, ?Car_Mudule, rpc_Call, [{car,approved,PID}])
+						north ->	rpc:call(?RM_North_Node, ?Car_Module, rpc_Call, [{car,approved,PID}]);  %Confirm 
+						south ->	rpc:call(?RM_South_Node, ?Car_Module, rpc_Call, [{car,approved,PID}]);
+						west ->		rpc:call(?RM_West_Node, ?Car_Module, rpc_Call, [{car,approved,PID}]);
+						east ->		rpc:call(?RM_East_Node, ?Car_Module, rpc_Call, [{car,approved,PID}])
 					end,
 					ets:insert(ETS,keyOfsset(ets:tab2list(HeavyPath_ETS),Slot_Counter,[])), %allocating
 					ets:delete(HeavyPath_ETS),												%erase heavy path
@@ -266,10 +267,10 @@ strightPath(X_axis,Y_axis,Angle) ->
 			[{TimeSlot,{X_axis ,Y_axis + ?Speed*TimeSlot ,270}}||TimeSlot<-lists:seq(0,?Intersection_Edge div ?Speed)]
 	end.
 
-%% Find lane thick path recursivly 
+%% Find lane recursivly 
 heavyPath(List)-> ETS = ets:new(heavy,[bag]), heavyPath(List,ETS).
-heavyPath([],ETS)-> ETS;
-heavyPath([{TimeSlot,{X,Y,Angle}}|T],ETS)-> fillCoor(X,Y,Angle,TimeSlot,ETS),heavyPath(T,ETS).
+heavyPath([],ETS)-> ETS;   %stop condition
+heavyPath([{TimeSlot,{X,Y,Angle}}|Rest],ETS)-> fillCoor((X div ?HeavyPixel),(Y div ?HeavyPixel),Angle,TimeSlot,ETS),heavyPath(Rest,ETS).
 
 %%Find specific coordinate occuupid area 
 fillCoor(X_front,Y_front,Angle,TimeSlot,ETS)->
