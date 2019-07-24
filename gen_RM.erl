@@ -17,15 +17,16 @@
 	 terminate/2, code_change/3]).
 
 %% defines
--define(Display_Node, 'S@132.72.105.66').
+-define(Display_Node, 'S@127.0.0.1').
 -define(Display_Module, noets).
 -define(Car_Speed, 20).
 -define(Road_Length, 450).
 -define(Road_width, 300).
+-define(Car_length, 50).
 -define(Lane_Num, 3).
 -define(Color_Num, 4).
 -define(Map_size, 1300).
--define(Lambda, 1/3000). %Ideal: 1/3000
+-define(Lambda, 1/5000). %Ideal: 1/3000
 
 
 %%%===================================================================
@@ -44,40 +45,47 @@ init([Road_Direction]) ->
     {ok, {ETS,Road_Direction,{[],[],[]}}}.
 
 handle_info({timeout,exp}, {ETS,Road_Direction,{Q1,Q2,Q3}}) ->
-    Lane = random:uniform(?Lane_Num) -1,
+	Lane = random:uniform(?Lane_Num) -1,
 	Color = random:uniform(?Color_Num) -1,
-	case Road_Direction of
-		west ->
-			Deg = 0,
-			X_Start_Axis = 0,
-			Y_Start_Axis = (?Map_size div 2) + Lane*(?Road_width div 6) + (?Road_width div 12),
-			X_Final_Axis = ?Road_Length,
-			Y_Final_Axis = Y_Start_Axis;
-		east ->
-			Deg = 180,
-			X_Start_Axis = ?Map_size,
-			Y_Start_Axis = (?Map_size div 2) - Lane*(?Road_width div 6) - (?Road_width div 12),
-			X_Final_Axis = ?Map_size - ?Road_Length,
-			Y_Final_Axis = Y_Start_Axis;
-		north ->
-			Deg = 270,
-			X_Start_Axis = (?Map_size div 2) - Lane*(?Road_width div 6) - (?Road_width div 12),
-			Y_Start_Axis = 0,
-			X_Final_Axis = X_Start_Axis,
-			Y_Final_Axis = ?Road_Length;
-		south ->
-			Deg = 90,
-			X_Start_Axis = (?Map_size div 2) + Lane*(?Road_width div 6) + (?Road_width div 12),
-			Y_Start_Axis = ?Map_size,
-			X_Final_Axis = X_Start_Axis,
-			Y_Final_Axis = ?Map_size - ?Road_Length
-	end,
-	Self = self(), {ok,PID} = gen_Car:start({X_Start_Axis,Y_Start_Axis}, {X_Final_Axis,Y_Final_Axis}, ?Car_Speed, before,Road_Direction,Self,Color), %Generating car
-	ets:insert(ETS, {PID,{X_Start_Axis,Y_Start_Axis,Deg,Color,Lane}}), %Storing in DATABASE
-	%Inserting to the relevant Lane queue
-	case Lane of 0-> New_Q1 = Q1 ++ [PID],New_Q2=Q2,New_Q3=Q3; 1-> New_Q2 = Q2 ++ [PID],New_Q1=Q1,New_Q3=Q3; 2-> New_Q3 = Q3 ++ [PID],New_Q1=Q1,New_Q2=Q2 end,
-	spawn(fun() -> timer(exp,?Lambda,Self) end), 	%Setting timeout-timer for generating car
-	{noreply, {ETS,Road_Direction,{New_Q1,New_Q2,New_Q3}}};
+	case Lane of 0-> L = length(Q1); 1-> L = length(Q2); 2-> L = length(Q3) end,  %checking if there is space in lane.
+	if
+		(L < (?Road_Length div ?Car_length)-1) ->
+			case Road_Direction of
+				west ->
+					Deg = 0,
+					X_Start_Axis = 0,
+					Y_Start_Axis = (?Map_size div 2) + Lane*(?Road_width div 6) + (?Road_width div 12),
+					X_Final_Axis = ?Road_Length,
+					Y_Final_Axis = Y_Start_Axis;
+				east ->
+					Deg = 180,
+					X_Start_Axis = ?Map_size,
+					Y_Start_Axis = (?Map_size div 2) - Lane*(?Road_width div 6) - (?Road_width div 12),
+					X_Final_Axis = ?Map_size - ?Road_Length,
+					Y_Final_Axis = Y_Start_Axis;
+				north ->
+					Deg = 270,
+					X_Start_Axis = (?Map_size div 2) - Lane*(?Road_width div 6) - (?Road_width div 12),
+					Y_Start_Axis = 0,
+					X_Final_Axis = X_Start_Axis,
+					Y_Final_Axis = ?Road_Length;
+				south ->
+					Deg = 90,
+					X_Start_Axis = (?Map_size div 2) + Lane*(?Road_width div 6) + (?Road_width div 12),
+					Y_Start_Axis = ?Map_size,
+					X_Final_Axis = X_Start_Axis,
+					Y_Final_Axis = ?Map_size - ?Road_Length
+			end,
+			Self = self(), {ok,PID} = gen_Car:start({X_Start_Axis,Y_Start_Axis}, {X_Final_Axis,Y_Final_Axis}, ?Car_Speed, before,Road_Direction,Self,Color), %Generating car
+			ets:insert(ETS, {PID,{X_Start_Axis,Y_Start_Axis,Deg,Color,Lane}}), %Storing in DATABASE
+			%Inserting to the relevant Lane queue
+			case Lane of 0-> New_Q1 = Q1 ++ [PID],New_Q2=Q2,New_Q3=Q3; 1-> New_Q2 = Q2 ++ [PID],New_Q1=Q1,New_Q3=Q3; 2-> New_Q3 = Q3 ++ [PID],New_Q1=Q1,New_Q2=Q2 end,
+			spawn(fun() -> timer(exp,?Lambda,Self) end), 	%Setting timeout-timer for generating car
+			{noreply, {ETS,Road_Direction,{New_Q1,New_Q2,New_Q3}}};
+		true ->
+			Self = self(),spawn(fun() -> timer(exp,?Lambda,Self) end), 	%Setting timeout-timer for generating car
+			{noreply, {ETS,Road_Direction,{Q1,Q2,Q3}}}
+	end;
 
 handle_info({rm,update,location,{X_New_Axis,Y_New_Axis},PID}, {ETS,Road_Direction,{Q1,Q2,Q3}}) ->
 	[{_,{_,_,Deg,Color,Lane}}] = ets:lookup(ETS, PID),  %getting other stored info
@@ -93,7 +101,7 @@ handle_info({rm,create,{Color,X,Y}}, {ETS,Road_Direction,{Q1,Q2,Q3}}) ->
 		north -> Deg = 90, X_Final_Axis = X, Y_Final_Axis = 0;
 		south -> Deg = 270, X_Final_Axis = X, Y_Final_Axis = ?Map_size
 	end,
-	Self = self(), {ok,PID} = gen_Car:start({X_Start_Axis,Y_Start_Axis}, {X_Final_Axis,Y_Final_Axis}, ?Car_Speed, before, Road_Direction, Self,Color), %Generating car at specific Lane
+	Self = self(), {ok,PID} = gen_Car:start({X_Start_Axis,Y_Start_Axis}, {X_Final_Axis,Y_Final_Axis}, ?Car_Speed, afterr, Road_Direction, Self,Color), %Generating car at specific Lane
 	ets:insert(ETS, {PID,{X_Start_Axis,Y_Start_Axis,Deg,Color,0}}), %Storing in Database 0* it's unused
 	{noreply, {ETS,Road_Direction,{Q1,Q2,Q3}}};
 
@@ -175,6 +183,6 @@ rpc_Call({rm,create,{Color,X,Y,RM_Direction}})->
 %%%===================================================================
 %{ok, PID} = gen_RM:start_link(north).
 %process_info(PID).
-%gen_RM:start_link(east),gen_RM:start_link(west),gen_RM:start_link(north),gen_RM:start_link(south).  
+%c(gen_Car),c(gen_RM),gen_RM:start_link(east),gen_RM:start_link(west),gen_RM:start_link(north),gen_RM:start_link(south).  
 %rpc:call('b@132.72.105.117',gen_dis,rpc_Call,[{display,update,location,{23,{100,100,1,1}}}]).
 %erl -name S@192.168.189.180 -setcookie cook

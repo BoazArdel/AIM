@@ -17,7 +17,7 @@
 	 terminate/2, code_change/3]).
 
 %% defines
--define(Display_Node, 'S@132.72.105.66').
+-define(Display_Node, 'S@127.0.0.1').
 -define(Display_Module, noets).
 -define(RM_North_Node, 'F@127.0.0.1').
 -define(RM_North_Module, gen_RM).
@@ -150,12 +150,14 @@ checkAndConfirm(ETS,Cars_ETS,Queue,Slot_Counter) ->
 						east ->		rpc:call(?RM_East_Node, ?Car_Mudule, rpc_Call, [{car,approved,PID}])
 					end,
 					ets:insert(ETS,keyOfsset(ets:tab2list(HeavyPath_ETS),Slot_Counter,[])), %allocating
-					ets:delete(HeavyPath_ETS),									%erase heavy path
-					NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ,Slot_Counter),NewQ2;			%next request
+					ets:delete(HeavyPath_ETS),												%erase heavy path
+					[{_,NewTimeSlot}] = ets:lookup(ETS, slot_Counter),  %getting time slot
+					NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ,NewTimeSlot),NewQ2;			%next request
 				
 				true ->       		%denied
+					[{_,NewTimeSlot}] = ets:lookup(ETS, slot_Counter),  %getting time slot
 					NewQ1 = queue:in({PID,{X,Y,Deg,Color,Road_Direction},Path,HeavyPath_ETS},NewQ), %insert
-					NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ1,Slot_Counter),NewQ2
+					NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ1,NewTimeSlot),NewQ2
 			end
 	end.
 
@@ -308,3 +310,4 @@ mod(0,_) -> 0.
 %%%===================================================================
 %%% Debug
 %%%===================================================================
+%c(noets),c(gen_IM),noets:init(),gen_IM:start_link().
