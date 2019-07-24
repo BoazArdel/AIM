@@ -132,8 +132,8 @@ handle_info({rm,request,rear_car_pid,PID}, {ETS,Road_Direction,{Q1,Q2,Q3}}) ->
 
 handle_info({rm,terminate},{ETS,Road_Direction,{Q1,Q2,Q3}}) ->
 	_ = [PID!{car,terminate}||{PID,{_,_,_,_,_}} <- ets:tab2list(ETS)],
+	_ = [{display,?Display_Node}!{display,delete,location,{PID,{X,Y,Ang,Color}}}||{PID,{X,Y,Ang,Color}} <- ets:tab2list(ETS)],
 	ets:delete(ETS),
-	%send via RPC {display,delete} for each car
 	{stop, shutdown, {ETS,Road_Direction,{Q1,Q2,Q3}}}.
 
 handle_call(_Event, _From, State) ->
@@ -182,7 +182,4 @@ search_Rear([First|Rest],Car_PID) ->
 %%% Debug
 %%%===================================================================
 %c(gen_Car),c(gen_RM).
-%process_info(PID).
-%c(gen_Car),c(gen_RM),gen_RM:start_link(east),gen_RM:start_link(west),gen_RM:start_link(north),gen_RM:start_link(south).  
-%rpc:call('b@132.72.105.117',gen_dis,rpc_Call,[{display,update,location,{23,{100,100,1,1}}}]).
-%erl -name S@192.168.189.180 -setcookie cook
+%erl -name S@127.0.0.1 -setcookie cook

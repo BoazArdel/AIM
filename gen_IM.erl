@@ -34,9 +34,10 @@
 -define(Intersection_Edge,400).
 -define(Corner_X, 550).
 -define(Corner_Y, 550).
--define(Car_length, 10).
--define(Car_width, 5).
+-define(Car_length, 13).
+-define(Car_width, 8).
 -define(HeavyPixel,5).
+-define(Calc_Time,6).
 
 %%%===================================================================
 %%% API
@@ -154,7 +155,7 @@ checkAndConfirm(ETS,Cars_ETS,Queue,Slot_Counter) ->
 				(Bool == true) -> 	%approve
 					ets:insert(Cars_ETS,{PID,Path,Road_Direction,Color,X,Y,Deg}),	
 					PID!{car,approved}, %approve car
-					ets:insert(ETS,keyOfsset(ets:tab2list(HeavyPath_ETS),((Slot_Counter+1) rem ?Slot_Counter_Mod),[])), %allocating
+					ets:insert(ETS,keyOfsset(ets:tab2list(HeavyPath_ETS),((Slot_Counter+?Calc_Time) rem ?Slot_Counter_Mod),[])), %allocating
 					ets:delete(HeavyPath_ETS),												%erase heavy path
 					[{_,NewTimeSlot}] = ets:lookup(Cars_ETS, slot_Counter), 									%getting time slot
 					NewQ1 = checkAndConfirm(ETS,Cars_ETS,NewQ,((NewTimeSlot+1) rem ?Slot_Counter_Mod)),NewQ1;	%next request
@@ -313,3 +314,4 @@ mod(0,_) -> 0.
 %%% Debug
 %%%===================================================================
 %c(gen_Display),c(gen_IM),gen_IM:start_link().
+%erl -name S@127.0.0.1 -setcookie cook
