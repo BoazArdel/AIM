@@ -32,8 +32,8 @@
 -define(Speed, 3).
 -define(Slot_Counter_Mod, 600).
 -define(Intersection_Edge,400).
--define(Corner_X, 450).
--define(Corner_Y, 450).
+-define(Corner_X, 550).
+-define(Corner_Y, 550).
 -define(Car_length, 10).
 -define(Car_width, 5).
 -define(HeavyPixel,5).
@@ -50,8 +50,8 @@ start_link() ->
 init([]) ->
 	%Database init
 	ETS = ets:new(im_ets, [bag,public,named_table]), 		%Data => {Timeslot,{X,Y}} for taken
-	ets:insert(ETS,{slot_Counter,0}),   %initial time slot is 0
 	Cars_ETS = ets:new(car_ets, [set,public,named_table]),	%DataBase => {PID,Path,Road_Destination,Color,X,Y,Deg})
+	ets:insert(Cars_ETS,{slot_Counter,0}),   %initial time slot is 0
 	Queue = queue:new(),				%Data => {PID,{X,Y,Deg,Color,Dest},Path,HeavyPath}, Path => {timeslot,{x,y,deg}} , HeavyPath => {timeslot,{x,y}}
 	
 	Self = self(),spawn(fun() -> moveCars(ETS,Cars_ETS,Self) end),	%Setting timeout-timer for moving cars
@@ -66,9 +66,9 @@ init([]) ->
     {ok, {ETS,Cars_ETS,Queue}}.
 
 handle_info({timeout,const},{ETS,Cars_ETS,Queue}) ->
-	[{_,Time}] = ets:lookup(ETS, slot_Counter),  %getting time slot
+	[{_,Time}] = ets:lookup(Cars_ETS, slot_Counter),  %getting time slot
 	%calculating and allocating + Confirm
-	NewQ = checkAndConfirm(ETS,Cars_ETS,Queue,((Time+2) rem ?Slot_Counter_Mod)),
+	NewQ = checkAndConfirm(ETS,Cars_ETS,Queue,((Time+1) rem ?Slot_Counter_Mod)),
 	{noreply, {ETS,Cars_ETS,NewQ}};
 
 handle_info({im,request,{X,Y,Deg,Color,RM_Dir},PID},{ETS,Cars_ETS,Queue}) ->
@@ -112,15 +112,15 @@ moveCars(ETS,Cars_ETS,MasterPid) ->
 		{terminate} -> ok
 	after ?Time_Slot -> 
 		%Update Time slot
-		[{_,Time}] = ets:lookup(ETS, slot_Counter),  %getting time slot
-		ets:delete(ETS,slot_Counter),
-		ets:insert(ETS,{slot_Counter,((Time+1) rem ?Slot_Counter_Mod)}),   %initial time slot is 0
+		[{_,Time}] = ets:lookup(Cars_ETS, slot_Counter),  %getting time slot
+		ets:insert(Cars_ETS,{slot_Counter,((Time+1) rem ?Slot_Counter_Mod)}),   %initial time slot is 0
 		%delete the past
 		ets:delete(ETS, Time), 
 		%send sync to Master
 		MasterPid!{timeout,const},	
 		%moving cars
-		_ = [sendUpdateMove(X,Cars_ETS)||X <- ets:tab2list(Cars_ETS)], %updating moves to Display + refreshing ETS
+		CarList = lists:delete({slot_Counter,((Time+1) rem ?Slot_Counter_Mod)}, ets:tab2list(Cars_ETS)),
+		_ = [sendUpdateMove(X,Cars_ETS)||X <- CarList], %updating moves to Display + refreshing ETS
 		moveCars(ETS,Cars_ETS,MasterPid)
 	end.
 	  
@@ -154,21 +154,20 @@ checkAndConfirm(ETS,Cars_ETS,Queue,Slot_Counter) ->
 				(Bool == true) -> 	%approve
 					ets:insert(Cars_ETS,{PID,Path,Road_Direction,Color,X,Y,Deg}),	
 					PID!{car,approved}, %approve car
-					ets:insert(ETS,keyOfsset(ets:tab2list(HeavyPath_ETS),Slot_Counter,[])), %allocating
+					ets:insert(ETS,keyOfsset(ets:tab2list(HeavyPath_ETS),((Slot_Counter+1) rem ?Slot_Counter_Mod),[])), %allocating
 					ets:delete(HeavyPath_ETS),												%erase heavy path
-					[{_,NewTimeSlot}] = ets:lookup(ETS, slot_Counter),  %getting time slot
-					NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ,((NewTimeSlot+2) rem ?Slot_Counter_Mod)),NewQ2;			%next request
-				
+					[{_,NewTimeSlot}] = ets:lookup(Cars_ETS, slot_Counter), 									%getting time slot
+					NewQ1 = checkAndConfirm(ETS,Cars_ETS,NewQ,((NewTimeSlot+1) rem ?Slot_Counter_Mod)),NewQ1;	%next request
 				true ->       		%denied
-					[{_,NewTimeSlot}] = ets:lookup(ETS, slot_Counter),  %getting time slot
-					NewQ1 = queue:in({PID,{X,Y,Deg,Color,Road_Direction},Path,HeavyPath_ETS},NewQ), %insert
-					NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ1,((NewTimeSlot+2) rem ?Slot_Counter_Mod)),NewQ2
+					[{_,NewTimeSlot}] = ets:lookup(Cars_ETS, slot_Counter),							%getting time slot
+					NewQ1 = checkAndConfirm(ETS,Cars_ETS,NewQ,((NewTimeSlot+1) rem ?Slot_Counter_Mod)),
+					queue:in({PID,{X,Y,Deg,Color,Road_Direction},Path,HeavyPath_ETS},NewQ1) %insert denied car
 			end
 	end.
 
 etsCrossCompareAllocation(Main_ETS,Path_ETS,Slot_Time,Index) ->
-	MainList = ets:lookup(Main_ETS, ((Slot_Time+Index) rem ?Slot_Counter_Mod)),
-	PathList = ets:lookup(Path_ETS, Index),
+	MainList = [{X,Y}||{_,{X,Y}}<-ets:lookup(Main_ETS, ((Slot_Time+Index) rem ?Slot_Counter_Mod))],
+	PathList = [{X,Y}||{_,{X,Y}}<-ets:lookup(Path_ETS, Index)],
 	if 
 		(PathList == []) -> %Stop Condition
 			true;
@@ -176,8 +175,9 @@ etsCrossCompareAllocation(Main_ETS,Path_ETS,Slot_Time,Index) ->
 			etsCrossCompareAllocation(Main_ETS,Path_ETS,Slot_Time,Index+1);
 		true ->
 			MutualList = lists:filter((fun(X) -> lists:member(X,MainList) end),PathList),
+			%io:format("req: Mutual:~p, Main:~p, Path:~p~n",[MutualList,MainList,PathList]),
 			if
-				(MutualList == []) -> etsCrossCompareAllocation(Main_ETS,Path_ETS,Slot_Time,Index+1);
+				(MutualList == []) ->	etsCrossCompareAllocation(Main_ETS,Path_ETS,Slot_Time,Index+1);
 				true -> false
 			end
 	end.
@@ -312,4 +312,4 @@ mod(0,_) -> 0.
 %%%===================================================================
 %%% Debug
 %%%===================================================================
-%c(noets),c(gen_IM),noets:init(),gen_IM:start_link().
+%c(gen_Display),c(gen_IM),gen_IM:start_link().

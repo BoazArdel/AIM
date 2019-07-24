@@ -18,15 +18,15 @@
 
 %% defines
 -define(Display_Node, 'S@127.0.0.1').
--define(Display_Module, noets).
+-define(Display_Module, gen_Display).
 -define(Car_Speed, 20).
--define(Road_Length, 450).
+-define(Road_Length, 550).
 -define(Road_width, 300).
 -define(Car_length, 50).
 -define(Lane_Num, 3).
 -define(Color_Num, 4).
--define(Map_size, 1300).
--define(Lambda, 1/5000). %Ideal: 1/3000
+-define(Map_size, 1500).
+-define(Lambda, 1/3000). %Ideal: 1/3000
 
 
 %%%===================================================================
@@ -121,10 +121,14 @@ handle_info({rm,update,term,PID}, {ETS,Road_Direction,{Q1,Q2,Q3}}) ->
 	{noreply, {ETS,Road_Direction,{New_Q1,New_Q2,New_Q3}}};
 
 handle_info({rm,request,rear_car_pid,PID}, {ETS,Road_Direction,{Q1,Q2,Q3}}) ->
-	[{_,{_,_,_,_,Lane}}] = ets:lookup(ETS, PID), %!!!!!!!!!!!!!!!!!
-	case Lane of 0-> Answer = search_Rear(Q1,PID);1-> Answer = search_Rear(Q2,PID);2-> Answer = search_Rear(Q3,PID) end,
-	PID!{car,rear_car_pid,Answer}, %Reply with answer
-	{noreply, {ETS,Road_Direction,{Q1,Q2,Q3}}};
+	case ets:lookup(ETS, PID) of
+	[{_,{_,_,_,_,Lane}}] ->
+		case Lane of 0-> Answer = search_Rear(Q1,PID);1-> Answer = search_Rear(Q2,PID);2-> Answer = search_Rear(Q3,PID) end,
+		PID!{car,rear_car_pid,Answer}, %Reply with answer
+		{noreply, {ETS,Road_Direction,{Q1,Q2,Q3}}};
+	_->
+		{noreply, {ETS,Road_Direction,{Q1,Q2,Q3}}}
+	end;
 
 handle_info({rm,terminate},{ETS,Road_Direction,{Q1,Q2,Q3}}) ->
 	_ = [PID!{car,terminate}||{PID,{_,_,_,_,_}} <- ets:tab2list(ETS)],
@@ -177,7 +181,7 @@ search_Rear([First|Rest],Car_PID) ->
 %%%===================================================================
 %%% Debug
 %%%===================================================================
-%{ok, PID} = gen_RM:start_link(north).
+%c(gen_Car),c(gen_RM).
 %process_info(PID).
 %c(gen_Car),c(gen_RM),gen_RM:start_link(east),gen_RM:start_link(west),gen_RM:start_link(north),gen_RM:start_link(south).  
 %rpc:call('b@132.72.105.117',gen_dis,rpc_Call,[{display,update,location,{23,{100,100,1,1}}}]).

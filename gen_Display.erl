@@ -9,9 +9,10 @@
 
 
 -include_lib("wx/include/wx.hrl").
-  -define(max_x,(1300)).
-  -define(max_y,(700)).
-  -define(bgOffset,(300)).
+-define(max_x,(1299)).
+-define(max_y,(700)).
+-define(bgOffset,(300)).
+-define(negOffset,(100)).
 
 %% ====================================================================
 %% API functions
@@ -32,11 +33,11 @@ init() ->
 		Wx = wx:new(),
 		Frame = wxFrame:new(Wx, -1, "AIM", [{size, {?max_x, ?max_y}}]),
 		Panel = wxPanel:new(Frame),
-		A = wxImage:new("/home/boaz/Erlang Workspace/AIM/src/Images/A.png"),
-		B = wxImage:new("/home/boaz/Erlang Workspace/AIM/src/Images/B.png"),
-		C = wxImage:new("/home/boaz/Erlang Workspace/AIM/src/Images/C.png"),
-		D = wxImage:new("/home/boaz/Erlang Workspace/AIM/src/Images/D.png"),
-		BG = wxBitmap:new(wxImage:new("/home/boaz/Erlang Workspace/AIM/src/Images/bg2.png")),
+		A = wxImage:new("../include/A.png"),
+		B = wxImage:new("../include/B.png"),
+		C = wxImage:new("../include/C.png"),
+		D = wxImage:new("../include/D.png"),
+		BG = wxBitmap:new( wxImage:new("../include/bg.png")),
 		wxFrame:show(Frame),
 		drawLoop(Panel,{A,B,C,D},BG,CarsETS).
 
@@ -56,8 +57,8 @@ init() ->
 					opsLoop(CarsETS);
 			{display,update,location,{PID,{X,Y,Angle,Color}}} -> 
 				if 
-					(?bgOffset<Y)andalso(Y<(?max_x-?bgOffset))->
-						ets:insert(CarsETS,{PID,{X,Y-?bgOffset,Angle,Color}}),
+					(?bgOffset-?negOffset<Y)andalso(Y<(?max_x-?bgOffset+2*?negOffset))->
+						ets:insert(CarsETS,{PID,{X-?negOffset,Y-?negOffset-?bgOffset,Angle,Color}}),
 						opsLoop(CarsETS);
 					true->
 						opsLoop(CarsETS)
@@ -66,7 +67,6 @@ init() ->
 				io:format("else:~p", [Else]),opsLoop(CarsETS)
 		end.
 	
-
 addSingle(DC,Color,NewPos,Angle)->
 	Temp = wxImage:rotate(Color, degToRad(Angle), {0,0}),
 	Bitmap = wxBitmap:new(Temp),
@@ -84,7 +84,6 @@ drawSession(Panel,CarImages,BG,CarsETS) ->
 	
 	wxBufferedDC:destroy(DC),
 	wxClientDC:destroy(ClientDC).
-
 
 degToRad(Deg)->
 	(math:pi()*Deg)/180.
@@ -109,8 +108,6 @@ offset({X,Y},AngleDeg)->
 		_ when (AngleDeg <360)->
 			{round(X-(?length*(math:sin(Angle-4.71))+((?length div 2)*math:cos(Angle-4.71)))),round(Y-(?length*(math:cos(Angle-4.71))+(?length div 2)*math:sin(Angle-4.71)))}
 	end.
-
-
 
 findMyColor({A,B,C,D},Color)->
 	case Color of
