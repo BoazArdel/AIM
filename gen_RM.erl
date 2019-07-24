@@ -17,7 +17,7 @@
 	 terminate/2, code_change/3]).
 
 %% defines
--define(Display_Node, 'S@127.0.0.1').
+-define(Display_Node, 'S@132.72.105.66').
 -define(Display_Module, noets).
 -define(Car_Speed, 20).
 -define(Road_Length, 450).
@@ -25,7 +25,7 @@
 -define(Lane_Num, 3).
 -define(Color_Num, 4).
 -define(Map_size, 1300).
--define(Lambda, 1/3000).
+-define(Lambda, 1/3000). %Ideal: 1/3000
 
 
 %%%===================================================================

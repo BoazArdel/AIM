@@ -109,7 +109,6 @@ move({timeout,const},{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_A
 			end
 	end;
 move({car,update,stop,{X_New_Stop_Axis,Y_New_Stop_Axis}},{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,_,_,Speed,Mode,RM_Direction,RM_PID,Color}) ->
-	io:format("->~p,~p~n",[{car,update,stop},self()]),
 	{next_state, move, {X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_New_Stop_Axis,Y_New_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Color}}; %Updating Stop Location
 move({car,update,continue},{X_New_Axis,Y_New_Axis,X_Dest_Axis,Y_Dest_Axis,_,_,Speed,Mode,RM_Direction,RM_PID,Color}) ->
 	{next_state, move,{X_New_Axis,Y_New_Axis,X_Dest_Axis,Y_Dest_Axis,false,false,Speed,Mode,RM_Direction,RM_PID,Color}}; 
@@ -208,6 +207,9 @@ handle_info({car,terminate}, move,{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_
 handle_info({car,update,continue}, move,{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Color}) ->
     gen_fsm:send_event(self(), {car,update,continue}),
 	{next_state, move, {X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Color}};
+handle_info({car,rear_car_pid, _}, move,{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Color}) ->
+	%Ignor
+    {next_state, move, {X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Color}};
 
 handle_info({car,rear_car_pid, Rear_Car_PID}, wait,{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,_,Color}) ->
 	gen_fsm:send_event(self(), {car,rear_car_pid, Rear_Car_PID}),
@@ -221,6 +223,9 @@ handle_info({car,approved}, wait,{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_A
 handle_info({car,terminate}, wait,{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Rear_Car_PID,Color}) ->
 	gen_fsm:send_event(self(), {car,terminate}),
     {next_state, wait, {X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Rear_Car_PID,Color}};
+handle_info({car,update,stop,{_,_}}, wait,{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Rear_Car_PID,Color}) ->
+	%Ignor
+    {next_state, move, {X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,Rear_Car_PID,Color}};
 
 handle_info({car,rear_car_pid, Rear_Car_PID}, stop,{X_Axis,Y_Axis,X_Dest_Axis,Y_Dest_Axis,X_Stop_Axis,Y_Stop_Axis,Speed,Mode,RM_Direction,RM_PID,_,Color}) ->
 	gen_fsm:send_event(self(), {car,rear_car_pid, Rear_Car_PID}),

@@ -17,7 +17,7 @@
 	 terminate/2, code_change/3]).
 
 %% defines
--define(Display_Node, 'S@127.0.0.1').
+-define(Display_Node, 'S@132.72.105.66').
 -define(Display_Module, noets).
 -define(RM_North_Node, 'F@127.0.0.1').
 -define(RM_North_Module, gen_RM).
@@ -47,25 +47,21 @@ start_link() ->
 %%% gen_server callbacks
 %%%===================================================================
 init([]) ->
-	ETS = ets:new(im_ets, [bag]), 		%Data => {Timeslot,{X,Y}} for taken
-	Cars_ETS = ets:new(car_ets, [set]),	%DataBase => {PID,Path,Road_Destination,Color,X,Y,Deg})
+	ETS = ets:new(im_ets, [bag,public,named_table]), 		%Data => {Timeslot,{X,Y}} for taken
+	ets:insert(ETS,{slot_Counter,0}),   %initial time slot is 0
+	Cars_ETS = ets:new(car_ets, [set,public,named_table]),	%DataBase => {PID,Path,Road_Destination,Color,X,Y,Deg})
 	Queue = queue:new(),				%Data => {PID,{X,Y,Deg,Color,Dest},Path,HeavyPath}, Path => {timeslot,{x,t,deg}} , HeavyPath => {timeslot,{x,y}}
-	Self = self(), spawn(fun() -> timer(const,?Time_Slot,Self) end), 	%Setting timeout-timer for moving cars
-	Slot_Counter = 0,       			%initial time slot is 0
+	Self = self(),spawn(fun() -> moveCars(ETS,Cars_ETS,Self) end),	%Setting timeout-timer for moving cars
 	register(im_server,Self),
-    {ok, {ETS,Cars_ETS,Queue,Slot_Counter}}.
+    {ok, {ETS,Cars_ETS,Queue}}.
 
-handle_info({timeout,const},{ETS,Cars_ETS,Queue,Slot_Counter}) ->
-	%moving cars
-	_ = [sendUpdateMove(X,Cars_ETS)||X <- ets:tab2list(Cars_ETS)], %updating moves to Display + refreshing ETS
-	%delete the past
-	ets:delete(ETS, Slot_Counter), 		
+handle_info({timeout,const},{ETS,Cars_ETS,Queue}) ->
+	[{_,Time}] = ets:lookup(ETS, slot_Counter),  %getting time slot
 	%calculating and allocating + Confirm
-	NewQ = checkAndConfirm(ETS,Cars_ETS,Queue,((Slot_Counter+1) rem ?Slot_Counter_Mod)),
-	Self = self(), spawn(fun() -> timer(const,?Time_Slot,Self) end), 	%Setting timeout-timer for moving cars
-	{noreply, {ETS,Cars_ETS,NewQ,((Slot_Counter+1) rem ?Slot_Counter_Mod)}};
+	NewQ = checkAndConfirm(ETS,Cars_ETS,Queue,((Time+1) rem ?Slot_Counter_Mod)),
+	{noreply, {ETS,Cars_ETS,NewQ}};
 
-handle_info({im,request,{X,Y,Deg,Color,RM_Dir},PID},{ETS,Cars_ETS,Queue,Slot_Counter}) ->
+handle_info({im,request,{X,Y,Deg,Color,RM_Dir},PID},{ETS,Cars_ETS,Queue}) ->
 	Direction = random:uniform(3)-1,
 	if 
 		(Direction==0) -> 
@@ -78,11 +74,12 @@ handle_info({im,request,{X,Y,Deg,Color,RM_Dir},PID},{ETS,Cars_ETS,Queue,Slot_Cou
 			Path = strightPath(X,Y,Deg),
 			case RM_Dir of north -> Dest = south; south -> Dest = north; west -> Dest = east; east-> Dest = west end
 	end,
+	
 	NewQ = queue:in({PID,{X,Y,Deg,Color,Dest},Path,heavyPath(Path)},Queue),
-	{noreply, {ETS,Cars_ETS,NewQ,Slot_Counter}};
+	{noreply, {ETS,Cars_ETS,NewQ}};
 
-handle_info(_,{ETS,Cars_ETS,Queue,Slot_Counter}) ->
-	{noreply, {ETS,Cars_ETS,Queue,Slot_Counter}}.
+handle_info(_,{ETS,Cars_ETS,Queue}) ->
+	{noreply, {ETS,Cars_ETS,Queue}}.
 
 handle_call(_Event, _From, State) ->
     Reply = ok,
@@ -100,6 +97,23 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+moveCars(ETS,Cars_ETS,MasterPid) ->
+	receive
+		{terminate} -> ok
+	after ?Time_Slot -> 
+		%Update Time slot
+		[{_,Time}] = ets:lookup(ETS, slot_Counter),  %getting time slot
+		ets:delete(ETS,slot_Counter),
+		ets:insert(ETS,{slot_Counter,((Time+1) rem ?Slot_Counter_Mod)}),   %initial time slot is 0
+		%delete the past
+		ets:delete(ETS, Time), 
+		%send sync to Master
+		MasterPid!{timeout,const},	
+		%moving cars
+		_ = [sendUpdateMove(X,Cars_ETS)||X <- ets:tab2list(Cars_ETS)], %updating moves to Display + refreshing ETS
+		moveCars(ETS,Cars_ETS,MasterPid)
+	end.
+	  
 sendUpdateMove({PID,Path,Road_Direction,Color,LastX,LastY,LastDeg},Cars_ETS) ->
 	if
 		(Path==[]) -> 
@@ -125,7 +139,7 @@ checkAndConfirm(ETS,Cars_ETS,Queue,Slot_Counter) ->
 			{{_,{PID,{X,Y,Deg,Color,Road_Direction},Path,HeavyPath_ETS}},NewQ} = queue:out(Queue),
 			
 			%checking collisions
-			Bool = etsCrossCompareAllocation(ETS,HeavyPath_ETS,Slot_Counter),
+			Bool = etsCrossCompareAllocation(ETS,HeavyPath_ETS,Slot_Counter,0),
 			if
 				(Bool == true) -> 	%approve
 					ets:insert(Cars_ETS,{PID,Path,Road_Direction,Color,X,Y,Deg}),
@@ -135,24 +149,30 @@ checkAndConfirm(ETS,Cars_ETS,Queue,Slot_Counter) ->
 						west ->		rpc:call(?RM_West_Node, ?Car_Mudule, rpc_Call, [{car,approved,PID}]);
 						east ->		rpc:call(?RM_East_Node, ?Car_Mudule, rpc_Call, [{car,approved,PID}])
 					end,
+					ets:insert(ETS,keyOfsset(ets:tab2list(HeavyPath_ETS),Slot_Counter,[])), %allocating
 					ets:delete(HeavyPath_ETS),									%erase heavy path
-					%NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ),NewQ2;			%next request
-					NewQ;
+					NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ,Slot_Counter),NewQ2;			%next request
 				
 				true ->       		%denied
-					NewQ1 = queue:in({PID,{X,Y,Deg,Color,Road_Direction},Path,HeavyPath_ETS},NewQ),
-					%NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ1),NewQ2
-					NewQ1
+					NewQ1 = queue:in({PID,{X,Y,Deg,Color,Road_Direction},Path,HeavyPath_ETS},NewQ), %insert
+					NewQ2 = checkAndConfirm(ETS,Cars_ETS,NewQ1,Slot_Counter),NewQ2
 			end
 	end.
 
-etsCrossCompareAllocation(Main_ETS,Path_ETS,Slot_Time) ->
-	PathList = keyOfsset(ets:tab2list(Path_ETS),Slot_Time,[]),
-	MainList = ets:tab2list(Main_ETS),
-	MutualList = lists:filter((fun(X) -> lists:member(X,MainList) end),PathList),
-	if
-		(MutualList == []) -> true;
-		true -> false
+etsCrossCompareAllocation(Main_ETS,Path_ETS,Slot_Time,Index) ->
+	MainList = ets:lookup(Main_ETS, ((Slot_Time+Index) rem ?Slot_Counter_Mod)),
+	PathList = ets:lookup(Path_ETS, Index),
+	if 
+		(PathList == []) -> %Stop Condition
+			true;
+		(MainList == []) ->
+			etsCrossCompareAllocation(Main_ETS,Path_ETS,Slot_Time,Index+1);
+		true ->
+			MutualList = lists:filter((fun(X) -> lists:member(X,MainList) end),PathList),
+			if
+				(MutualList == []) -> etsCrossCompareAllocation(Main_ETS,Path_ETS,Slot_Time,Index+1);
+				true -> false
+			end
 	end.
 
 keyOfsset([],_,Ans) -> Ans; 					%adding all keys ofsset and modding the outcome
@@ -272,21 +292,6 @@ connectDots({X1,Y1},{X2,Y2},TimeSlot,ETS)->
 			N = (Y1*X2-Y2*X1)/(X2-X1)
 	end,
 	[ets:insert(ETS, {TimeSlot,{X,round(M*X+N)}})||X<-lists:seq(lists:min([X1,X2]), lists:max([X1,X2]))].%all line dots
-
-timer(Mode,Par,PID) ->
-	case Mode of
-		const -> 
-			receive
-				{cancel} -> ok
-			after Par -> PID!{timeout,Mode}
-			end;
-		exp -> 
-			T = trunc(-math:log(random:uniform())/Par),
-			receive
-				{cancel} -> ok
-			after T -> 	PID!{timeout,Mode}
-			end
-	end.
 
 rpc_Call(Msg) ->
 	im_server!Msg.
